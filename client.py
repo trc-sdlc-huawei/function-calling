@@ -20,6 +20,7 @@ load_dotenv()  # load environment variables from .env
 
 class MCPClient:
     def __init__(self):
+        print("\n>>>>>>the __init__ method of MCPClient")
         # Initialize session and client objects
         self.session: Optional[ClientSession] = None
         self.exit_stack = AsyncExitStack()
@@ -31,6 +32,7 @@ class MCPClient:
         Args:
             server_script_path: Path to the server script (.py or .js)
         """
+        print("\n>>>>>the connect_to_server method of MCPClient")
         is_python = server_script_path.endswith('.py')
         is_js = server_script_path.endswith('.js')
         if not (is_python or is_js):
@@ -56,6 +58,7 @@ class MCPClient:
 
     async def process_query(self, query: str, llm_choice: str = "claude") -> str:
         """Process a query using Claude or OpenAI and available tools"""
+        print("\n>>>>>the process_query method of MCPClient")
         log_event(logger, "process_query_start", {"llm_choice": llm_choice, "query": query})
         try:
             if llm_choice.lower() == "claude":
@@ -206,6 +209,7 @@ class MCPClient:
     
     async def cleanup(self):
         """Clean up resources"""
+        print("\n>>>>>Cleaning up resources...")
         await self.exit_stack.aclose()
 
 async def main():
