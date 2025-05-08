@@ -13,9 +13,9 @@ import os
 from openai import OpenAI
 from huawei_tools import huawei_tools,weather_tools
 import json
-from my_logger import setup_logger, log_info, log_warning, log_error, log_debug, log_exception, log_separator, log_event, log_dict
+from my_logger import logging, setup_logger, log_info, log_warning, log_error, log_debug, log_exception, log_separator, log_event, log_dict
 
-logger = setup_logger("client_logger", log_to_console=False, log_to_file="client.log")
+logger = setup_logger("client_logger",logging.DEBUG, log_to_console=False, log_to_file="client.log")
 load_dotenv()  # load environment variables from .env
 
 class MCPClient:
@@ -81,39 +81,37 @@ class MCPClient:
                 )
                 log_info(logger, f"Claude: Initial response: {response}")
                 final_text = []
-                while True:
-                    for content in response.content:
-                        log_debug(logger, f"Claude content type: {content.type}")
-                        if content.type == 'text':
-                            final_text.append(content.text)
-                        elif content.type == 'tool_use':
-                            tool_name = content.name
-                            tool_args = content.input
-                            log_event(logger, "Claude tool_call", {"tool_name": tool_name, "tool_args": tool_args})
-                            result = await self.session.call_tool(tool_name, tool_args)
-                            log_info(logger, f"Claude tool result: {result}")
-                            final_text.append(f"[Calling tool {tool_name} with args {tool_args}]")
-                            if hasattr(content, 'text') and content.text:
-                                messages.append({
-                                  "role": "assistant",
-                                  "content": content.text
-                                })
+                for content in response.content:
+                    log_debug(logger, f"Claude content type: {content.type}")
+                    if content.type == 'text':
+                        final_text.append(content.text)
+                    elif content.type == 'tool_use':
+                        tool_name = content.name
+                        tool_args = content.input
+                        log_event(logger, "Claude tool_call", {"tool_name": tool_name, "tool_args": tool_args})
+                        result = await self.session.call_tool(tool_name, tool_args)
+                        log_info(logger, f"Claude tool result: {result}")
+                        final_text.append(f"[Calling tool {tool_name} with args {tool_args}]")
+                        if hasattr(content, 'text') and content.text:
                             messages.append({
-                                "role": "user", 
-                                "content": result.content
+                              "role": "assistant",
+                              "content": content.text
                             })
-                            response = self.anthropic.messages.create(
-                                model="claude-3-5-sonnet-20241022",
-                                max_tokens=1000,
-                                messages=messages,
-                            )
-                            log_info(logger, f"Claude: Next response: {response}")
-                            final_text.append(response.content[0].text)
-                            break  # Only process one tool_use per loop
-                    else:
-                        break  # No tool_use found, break loop
+                        messages.append({
+                            "role": "user", 
+                            "content": result.content
+                        })
+                        # Get next response from Claude
+                        response = self.anthropic.messages.create(
+                            model="claude-3-5-sonnet-20241022",
+                            max_tokens=1000,
+                            messages=messages,
+                        )
+                        log_info(logger, f"Claude: Next response: {response}")
+                        final_text.append(response.content[0].text)
                 log_event(logger, "process_query_end", {"llm_choice": llm_choice})
                 return "\n".join(final_text)
+
             elif llm_choice.lower() == "openai":
                 api_key = os.getenv("OPENAI_API_KEY")
                 if not api_key:
@@ -123,13 +121,15 @@ class MCPClient:
                 messages = [{"role": "user", "content": query}]
                 output_str = []
                 log_event(logger, "OpenAI: Start conversation", {"messages": messages})
-                while True:
+                use_tool = True
+                while use_tool:
+                    use_tool = False
                     response = client.responses.create(
                         model="gpt-4.1",
                         input=messages,
-                        tools=weather_tools
+                        tools=huawei_tools
                     )
-                    log_info(logger, f"OpenAI: Response: {response}")
+                    log_info(logger, f"OpenAI: Response output: {response.output}")
                     found_function_call = False
                     for item in response.output:
                         log_debug(logger, f"OpenAI output item: {item}")
@@ -137,34 +137,40 @@ class MCPClient:
                         if item.type == "function_call":
                             found_function_call = True
                             func_name = item.name
-                            func_args = item.arguments
-                            log_event(logger, "OpenAI tool_call", {"func_name": func_name, "func_args": func_args})
+                            func_args = json.loads(item.arguments)
+                            log_event(logger, "OpenAI tool_call", {"tool_name": func_name, "tool_args": func_args})
                             tool_result = None
-                            for tool in weather_tools:
+                            for tool in huawei_tools:
                                 if tool["name"] == func_name:
-                                    tool_result = f"[Simulated call to {func_name} with {func_args}]"
+                                    # call tool
+                                    tool_result = await self.session.call_tool(func_name, func_args)
                                     break
                             if tool_result is None:
                                 tool_result = f"Tool {func_name} not found."
                             log_info(logger, f"OpenAI tool result: {tool_result}")
                             messages.append({
                                 "role": "assistant",
-                                "content": json.dumps({"function_call": {"name": func_name, "arguments": func_args}})
+                                "content": str(tool_result)
                             })
-                            messages.append({
-                                "role": "function",
-                                "name": func_name,
-                                "content": tool_result
-                            })
+
                             output_str.append(f"Function call: {func_name} with {func_args}")
                             output_str.append(f"Tool result: {tool_result}")
+
+                            log_info(logger, f"OpenAI messages: {messages}")
+
+                            response = client.responses.create(
+                                model="gpt-4.1",
+                                input=messages,
+                                tools=huawei_tools
+                            )
+                            log_info(logger, f"OpenAI response output: {response.output}")
+
                     if not found_function_call:
                         for item in response.output:
-                            if hasattr(item, "text"):
-                                output_str.append(str(item.text))
-                        break
+                            output_str.append(str(item))
+                        use_tool = False
                 output_str.append('=============================response output======================================================')
-                output_str.append(str(response.output))
+   
                 output_str.append('===================================================================================')
                 log_event(logger, "process_query_end", {"llm_choice": llm_choice})
                 return "\n".join(output_str)
@@ -183,8 +189,8 @@ class MCPClient:
         
         llm_choice = input("Which llm? (claude/openai): ").strip().lower()
         if llm_choice not in ["claude", "openai"]:
-            print("Invalid LLM choice. Defaulting to 'claude'.")
-            llm_choice = "claude"
+            print("Invalid LLM choice. Defaulting to 'openai'.")
+            llm_choice = "openai"
         while True:
             try:
                 query = input("\nQuery: ").strip()

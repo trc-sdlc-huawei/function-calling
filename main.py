@@ -1,35 +1,24 @@
-import os
-from openai import OpenAI
-from dotenv import load_dotenv
-import json
-from huawei_tools import huawei_tools
-load_dotenv()
+from fastapi import FastAPI
+from pydantic import BaseModel
 
-api_key = os.getenv("OPENAI_API_KEY")
-if not api_key:
-    raise RuntimeError("OPENAI_API_KEY environment variable not set.")
+app = FastAPI()
 
-client = OpenAI()
+class QueryRequest(BaseModel):
+    prompt: str
 
+@app.get("/health")
+async def health_check():
+    return {"status": "ok"}
 
-
-
-user_message = input("Enter your message: ")
-response = client.responses.create(
-    model="gpt-4.1",
-    input=[{"role": "user", "content": user_message}],
-    tools=huawei_tools
-)
+@app.post("/query")
+async def query_endpoint(request: QueryRequest):
+    # Return mock response
+    return {
+        "response": f"Mock response to: '{request.prompt}'"
+    }
 
 
 
-print('====================================type===============================================')
-for item in response.output:
-    print(item.type)
-    if (item.type == "function_call"):
-        print(item.arguments)
-        print(item.name)
-print('=============================response output======================================================')
-print(response.output)
-
-print('===================================================================================')
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

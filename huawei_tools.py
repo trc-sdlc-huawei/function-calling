@@ -202,3 +202,44 @@ weather_tools = [{
         "additionalProperties": False
     }
 }]
+
+
+
+server_weather_tools = [
+    {
+        "type": "function",
+        "name": "get_alerts",
+        "description": "Get weather alerts for a US state.\n\nArgs:\n    state: Two-letter US state code (e.g. CA, NY)",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "state": {
+                    "type": "string",
+                    "description": "Two-letter US state code (e.g. CA, NY)"
+                }
+            },
+            "required": ["state"],
+            "additionalProperties": False
+        }
+    },
+    {
+        "type": "function",
+        "name": "get_forecast",
+        "description": "Get weather forecast for a location.\n\nArgs:\n    latitude: Latitude of the location\n    longitude: Longitude of the location",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "latitude": {
+                    "type": "number",
+                    "description": "Latitude of the location"
+                },
+                "longitude": {
+                    "type": "number",
+                    "description": "Longitude of the location"
+                }
+            },
+            "required": ["latitude", "longitude"],
+            "additionalProperties": False
+        }
+    }
+]

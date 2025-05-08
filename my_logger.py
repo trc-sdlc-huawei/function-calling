@@ -3,7 +3,7 @@ import sys
 from datetime import datetime
 
 
-def setup_logger(name: str = "app_logger", level=logging.INFO, log_to_console=True, log_to_file=None):
+def setup_logger(name: str = "app_logger", level=logging.DEBUG, log_to_console=True, log_to_file=None):
     """Set up and return a logger with the given name and level."""
     logger = logging.getLogger(name)
     logger.setLevel(level)
