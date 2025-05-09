@@ -5,6 +5,7 @@ import asyncio
 
 app = FastAPI()
 
+mcp_client = None
 
 # Request model
 class QueryRequest(BaseModel):
@@ -19,33 +20,43 @@ def health_check():
 # Startup event to initialize MCPClient and connect to server
 @app.on_event("startup")
 async def startup_event():
-    # global mcp_client
+    global mcp_client
     mcp_client = MCPClient()
     # TODO: Replace 'path_to_server_script.py' with your actual server script path
     try:
-        await mcp_client.connect_to_server(r'C:\\Users\\user1\\work\\git-repo\\quickstart-resources\\weather-server-python\\weather.py')
+        await mcp_client.connect_to_server('/home/ubuntu/work/git-repo/quickstart-resources/weather-server-python/weather.py')
         # await client.chat_loop()
     finally:
-        await mcp_client.cleanup()
+        pass
+        # await mcp_client.cleanup()
 
-# Query endpoint
-# @app.post("/query")
-# async def handle_query(req: QueryRequest):
-#     # global mcp_client
-#     # if mcp_client is None:
-#     #     return {"error": "MCPClient not initialized"}
-#     # response = await mcp_client.process_query(req.query, llm_choice=req.llm_choice)
-#     response = "Hello, World!"
-#     return {
-#         "llm_choice": req.llm_choice,
-#         "query": req.query,
-#         "response": response
-#     }
+@app.post("/query")
+async def handle_query(req: QueryRequest):
+    global mcp_client
+    response = await mcp_client.process_query(req.query, llm_choice=req.llm_choice)
+    return {
+        "llm_choice": req.llm_choice,
+        "query": req.query,
+        "response": response
+    }
+
+@app.get("/tools")
+async def get_tools():
+    global mcp_client
+    response = await mcp_client.session.list_tools()
+    return response.tools
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    global mcp_client
+    if mcp_client is not None:
+        await mcp_client.cleanup()
 
 async def connect():
     client = MCPClient()
     try:
-        await client.connect_to_server(r'C:\\Users\\user1\\work\\git-repo\\quickstart-resources\\weather-server-python\\weather.py')
+        await client.connect_to_server('/home/ubuntu/work/git-repo/quickstart-resources/weather-server-python/weather.py')
         # await client.chat_loop()
     finally:
         await client.cleanup()

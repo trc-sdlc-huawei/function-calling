@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 
 import os
 from openai import OpenAI
-from huawei_tools import huawei_tools,weather_tools
+from huawei_tools import weather_tools,server_weather_tools
 import json
 from my_logger import logging, setup_logger, log_info, log_warning, log_error, log_debug, log_exception, log_separator, log_event, log_dict
 
@@ -130,7 +130,7 @@ class MCPClient:
                     response = client.responses.create(
                         model="gpt-4.1",
                         input=messages,
-                        tools=huawei_tools
+                        tools=server_weather_tools
                     )
                     log_info(logger, f"OpenAI: Response output: {response.output}")
                     found_function_call = False
@@ -143,7 +143,7 @@ class MCPClient:
                             func_args = json.loads(item.arguments)
                             log_event(logger, "OpenAI tool_call", {"tool_name": func_name, "tool_args": func_args})
                             tool_result = None
-                            for tool in huawei_tools:
+                            for tool in server_weather_tools:
                                 if tool["name"] == func_name:
                                     # call tool
                                     tool_result = await self.session.call_tool(func_name, func_args)
@@ -164,7 +164,7 @@ class MCPClient:
                             response = client.responses.create(
                                 model="gpt-4.1",
                                 input=messages,
-                                tools=huawei_tools
+                                tools=server_weather_tools
                             )
                             log_info(logger, f"OpenAI response output: {response.output}")
 
