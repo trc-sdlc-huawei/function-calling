@@ -56,7 +56,7 @@ class MCPClient:
         tools = response.tools
         print("\nConnected to server with tools:", [tool.name for tool in tools])
 
-    async def process_query(self, query: str, llm_choice: str = "claude") -> str:
+    async def process_query(self, query: str, llm_choice: str = "openai") -> str:
         """Process a query using Claude or OpenAI and available tools"""
         print("\n>>>>>the process_query method of MCPClient")
         log_event(logger, "process_query_start", {"llm_choice": llm_choice, "query": query})
@@ -136,7 +136,6 @@ class MCPClient:
                     found_function_call = False
                     for item in response.output:
                         log_debug(logger, f"OpenAI output item: {item}")
-                        output_str.append(str(item.type))
                         if item.type == "function_call":
                             found_function_call = True
                             func_name = item.name
@@ -156,8 +155,7 @@ class MCPClient:
                                 "content": str(tool_result)
                             })
 
-                            output_str.append(f"Function call: {func_name} with {func_args}")
-                            output_str.append(f"Tool result: {tool_result}")
+
 
                             log_info(logger, f"OpenAI messages: {messages}")
 
@@ -167,14 +165,14 @@ class MCPClient:
                                 tools=server_weather_tools
                             )
                             log_info(logger, f"OpenAI response output: {response.output}")
+                            for item in response.output:
+                                log_debug(logger, f"OpenAI output item: {item}")
+                                if item.type == "message":
+                                    for content in item.content:
+                                        log_debug(logger, f"OpenAI content: {content}")
+                                        if content.type == "output_text":
+                                            output_str.append(content.text)
 
-                    if not found_function_call:
-                        for item in response.output:
-                            output_str.append(str(item))
-                        use_tool = False
-                output_str.append('=============================response output======================================================')
-   
-                output_str.append('===================================================================================')
                 log_event(logger, "process_query_end", {"llm_choice": llm_choice})
                 return "\n".join(output_str)
             else:

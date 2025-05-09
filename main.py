@@ -24,7 +24,7 @@ async def startup_event():
     mcp_client = MCPClient()
     # TODO: Replace 'path_to_server_script.py' with your actual server script path
     try:
-        await mcp_client.connect_to_server('/home/ubuntu/work/git-repo/quickstart-resources/weather-server-python/weather.py')
+        await mcp_client.connect_to_server('/home/user1/work/git-repo/quickstart-resources/weather-server-python/weather.py')
         # await client.chat_loop()
     finally:
         pass
@@ -56,7 +56,7 @@ async def shutdown_event():
 async def connect():
     client = MCPClient()
     try:
-        await client.connect_to_server('/home/ubuntu/work/git-repo/quickstart-resources/weather-server-python/weather.py')
+        await client.connect_to_server('/home/user1/work/git-repo/quickstart-resources/weather-server-python/weather.py')
         # await client.chat_loop()
     finally:
         await client.cleanup()
