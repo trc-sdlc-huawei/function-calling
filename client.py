@@ -1,30 +1,37 @@
 import asyncio
-from typing import Optional
+from typing import Optional, List, Tuple
 from contextlib import AsyncExitStack
 
-from mcp import ClientSession, StdioServerParameters
+from mcp import ClientSession, ListToolsResult, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from anthropic import Anthropic
+
 from dotenv import load_dotenv
 
-
+from converter import openai_converter
 import os
 from openai import OpenAI
-from huawei_tools import weather_tools,server_weather_tools
 import json
-from my_logger import logging, setup_logger, log_info, log_warning, log_error, log_debug, log_exception, log_separator, log_event, log_dict
+import my_logger as mylog
+import response_model as respmod
 
-logger = setup_logger("client_logger",logging.DEBUG, log_to_console=False, log_to_file="client.log")
+logger = mylog.setup_logger("client_logger", mylog.logging.DEBUG, log_to_console=False, log_to_file="client.log")
 load_dotenv()  # load environment variables from .env
 
 class MCPClient:
     def __init__(self):
         print("\n>>>>>>the __init__ method of MCPClient")
+
+
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            mylog.log_error(logger, "OPENAI_API_KEY environment variable not set.")
+            raise RuntimeError("OPENAI_API_KEY environment variable not set.")
+
         # Initialize session and client objects
         self.session: Optional[ClientSession] = None
         self.exit_stack = AsyncExitStack()
-        self.anthropic = Anthropic()
+        self.openai = OpenAI()
 
     async def connect_to_server(self, server_script_path: str):
         """Connect to an MCP server
@@ -52,159 +59,176 @@ class MCPClient:
         await self.session.initialize()
         
         # List available tools
-        response = await self.session.list_tools()
-        tools = response.tools
+        list_tools_response = await self.session.list_tools()
+        tools = list_tools_response.tools
         print("\nConnected to server with tools:", [tool.name for tool in tools])
 
-    async def process_query(self, query: str, llm_choice: str = "openai") -> str:
-        """Process a query using Claude or OpenAI and available tools"""
+        self.openai_tools = openai_converter.convert_tools(tools)
+
+
+
+    async def process_query(self, query: str, llm_choice: str = "openai", tool_choice=None):
+        """Process a query using OpenAI and available tools, returning a structured JSON response"""
         print("\n>>>>>the process_query method of MCPClient")
-        log_event(logger, "process_query_start", {"llm_choice": llm_choice, "query": query})
+        mylog.log_event(logger, "process_query_start", {"llm_choice": llm_choice, "query": query, "tool_choice": tool_choice})
         try:
-            if llm_choice.lower() == "claude":
-                messages = [
-                    {
-                        "role": "user",
-                        "content": query
-                    }
-                ]
-                log_info(logger, f"Claude: Initial messages: {messages}")
-                response = await self.session.list_tools()
-                available_tools = [{ 
-                    "name": tool.name,
-                    "description": tool.description,
-                    "input_schema": tool.inputSchema
-                } for tool in response.tools]
-                log_dict(logger, available_tools, "Claude available_tools")
-                response = self.anthropic.messages.create(
-                    model="claude-3-5-sonnet-20241022",
-                    max_tokens=1000,
-                    messages=messages,
-                    tools=available_tools
-                )
-                log_info(logger, f"Claude: Initial response: {response}")
-                final_text = []
-                for content in response.content:
-                    log_debug(logger, f"Claude content type: {content.type}")
-                    if content.type == 'text':
-                        final_text.append(content.text)
-                    elif content.type == 'tool_use':
-                        tool_name = content.name
-                        tool_args = content.input
-                        log_event(logger, "Claude tool_call", {"tool_name": tool_name, "tool_args": tool_args})
-                        result = await self.session.call_tool(tool_name, tool_args)
-                        log_info(logger, f"Claude tool result: {result}")
-                        final_text.append(f"[Calling tool {tool_name} with args {tool_args}]")
-                        if hasattr(content, 'text') and content.text:
-                            messages.append({
-                              "role": "assistant",
-                              "content": content.text
-                            })
-                        messages.append({
-                            "role": "user", 
-                            "content": result.content
-                        })
-                        # Get next response from Claude
-                        response = self.anthropic.messages.create(
-                            model="claude-3-5-sonnet-20241022",
-                            max_tokens=1000,
-                            messages=messages,
-                        )
-                        log_info(logger, f"Claude: Next response: {response}")
-                        final_text.append(response.content[0].text)
-                log_event(logger, "process_query_end", {"llm_choice": llm_choice})
-                return "\n".join(final_text)
-
-            elif llm_choice.lower() == "openai":
-                api_key = os.getenv("OPENAI_API_KEY")
-                if not api_key:
-                    log_error(logger, "OPENAI_API_KEY environment variable not set.")
-                    raise RuntimeError("OPENAI_API_KEY environment variable not set.")
-                client = OpenAI()
-                messages = [{"role": "user", "content": query}]
-                output_str = []
-                log_event(logger, "OpenAI: Start conversation", {"messages": messages})
-                use_tool = True
-                while use_tool:
-                    use_tool = False
-                    response = client.responses.create(
-                        model="gpt-4.1",
-                        input=messages,
-                        tools=server_weather_tools
-                    )
-                    log_info(logger, f"OpenAI: Response output: {response.output}")
-                    found_function_call = False
-                    for item in response.output:
-                        log_debug(logger, f"OpenAI output item: {item}")
-                        if item.type == "function_call":
-                            found_function_call = True
-                            func_name = item.name
-                            func_args = json.loads(item.arguments)
-                            log_event(logger, "OpenAI tool_call", {"tool_name": func_name, "tool_args": func_args})
-                            tool_result = None
-                            for tool in server_weather_tools:
-                                if tool["name"] == func_name:
-                                    # call tool
-                                    tool_result = await self.session.call_tool(func_name, func_args)
-                                    break
-                            if tool_result is None:
-                                tool_result = f"Tool {func_name} not found."
-                            log_info(logger, f"OpenAI tool result: {tool_result}")
-                            messages.append({
-                                "role": "assistant",
-                                "content": str(tool_result)
-                            })
-
-
-
-                            log_info(logger, f"OpenAI messages: {messages}")
-
-                            response = client.responses.create(
-                                model="gpt-4.1",
-                                input=messages,
-                                tools=server_weather_tools
-                            )
-                            log_info(logger, f"OpenAI response output: {response.output}")
-                            for item in response.output:
-                                log_debug(logger, f"OpenAI output item: {item}")
-                                if item.type == "message":
-                                    for content in item.content:
-                                        log_debug(logger, f"OpenAI content: {content}")
-                                        if content.type == "output_text":
-                                            output_str.append(content.text)
-
-                log_event(logger, "process_query_end", {"llm_choice": llm_choice})
-                return "\n".join(output_str)
+            if llm_choice.lower() == "openai":
+                return await self._process_query_openai(query, tool_choice=tool_choice)
             else:
-                log_warning(logger, f"Invalid LLM choice: {llm_choice}")
-                return "Invalid LLM choice. Please select 'claude' or 'openai'."
+                mylog.log_warning(logger, f"Invalid LLM choice: {llm_choice}")
+                return {"error": "Invalid LLM choice. Please select 'openai'."}
         except Exception as e:
-            log_exception(logger, f"Error in process_query: {e}")
+            mylog.log_exception(logger, f"Error in process_query: {e}")
             raise
 
+    async def _process_query_openai(self, user_query: str, tool_choice=None):
+        """Handle user query processing for OpenAI LLM."""
+        flow = []
+        openai_query_messages = [{"role": "user", "content": user_query}]
+        mylog.log_event(logger, "OpenAI: Start conversation", {"messages": openai_query_messages})
+        need_query_openai: bool = True
+        add_tools_to_next_openai_query: bool = True
+        answer_text = ""
+        overall_tool_use_names: List[str] = []
+        
+        while need_query_openai:
+            # call openai api, with tools or without tools
+            if add_tools_to_next_openai_query:
+                openai_response = await self._call_openai_api(openai_query_messages, self.openai_tools, tool_choice=tool_choice)
+                llm_interaction = respmod.LLMCall(llm="gpt-4.1", request={"messages": openai_query_messages, "tools": self.openai_tools, "tool_choice": tool_choice}, response=[item.model_dump() for item in openai_response.output])
+                flow.append(respmod.Interaction(type="llm_api_call", details=llm_interaction.model_dump()))
+                add_tools_to_next_openai_query = any([output_item.type == "function_call" for output_item in openai_response.output])  
+                need_query_openai = add_tools_to_next_openai_query
+            else:
+                openai_response = await self._call_openai_api(openai_query_messages,self.openai_tools, tool_choice="auto")
+                llm_interaction = respmod.LLMCall(llm="gpt-4.1", request={"messages": openai_query_messages, "tools": self.openai_tools, "tool_choice": "auto"}, response=[item.model_dump() for item in openai_response.output])
+                flow.append(respmod.Interaction(type="llm_api_call", details=llm_interaction.model_dump()))
+            mylog.log_info(logger, f"OpenAI: Response output: {openai_response.output}")
 
+            
+            # process openai response, with function call or without function call
+            if any([output_item.type == "function_call" for output_item in openai_response.output]):
+                # function call, and continue the loop
+                # add the output of function call to the openai query messages
+                openai_query_messages.extend(response_output_item for response_output_item in openai_response.output if response_output_item.type == "function_call")
+                current_tool_use_names, tool_calls_results = await self.process_openai_function_call_response(openai_response, flow)
+                overall_tool_use_names.extend(current_tool_use_names)
+                # add the tool call results to the openai query messages
+                openai_query_messages.extend([
+                    {"type": "function_call_output", "output": tool_call_result, "call_id": call_id}
+                    for call_id, tool_call_result in tool_calls_results
+                ])
+            else:
+                # no function call, just return the answer
+                openai_answer_text = await self.process_openai_message_response(openai_response)
+                answer_text = openai_answer_text
+            
+            mylog.log_event(logger, "process_query_end", {"llm_choice": "openai"})
+        
+        
+        
+        
+        
+        
+        response_obj = respmod.QueryResponse(
+            names_of_tools_used=overall_tool_use_names,
+            flow=flow,
+            final_answer=answer_text
+        )
+        return response_obj.model_dump()
+
+
+
+    async def process_openai_function_call_response(self, openai_response, flow)-> List[Tuple[str, str]]:
+        """ 
+        Handle OpenAI responses that contain function/tool calls.
+        - Extracts the function call
+        - Executes the tool
+        - Updates the flow
+        - returns overall tool use names and tool call results
+        """
+        overall_tool_use_names: List[str]= []
+        tool_calls_results: List[Tuple[str, str]] = []
+        for item in openai_response.output:
+            mylog.log_debug(logger, f"OpenAI output item: {item}")
+            if item.type == "function_call":
+                func_name = item.name
+                func_args = json.loads(item.arguments)
+                mylog.log_event(logger, "OpenAI tool_call", {"tool_name": func_name, "tool_args": func_args})
+                tool_result = None
+                tool_result = await self._execute_tool_by_name_and_args(func_name, func_args)
+                if tool_result is None:
+                    tool_result = f"Tool {func_name} not found."
+                overall_tool_use_names.append(func_name)    
+                mylog.log_info(logger, f"OpenAI tool result: {tool_result}")
+                tool_use = respmod.ToolCall(tool_name=func_name, tool_args=func_args, tool_response=tool_result)
+                flow.append(respmod.Interaction(type="tool_call", details=tool_use.model_dump()))
+                tool_calls_results.append((item.call_id,str(tool_result)))
+        return overall_tool_use_names, tool_calls_results
+
+
+    async def _execute_tool_by_name_and_args(self, tool_name, tool_args):
+        for tool in self.openai_tools:
+            if tool["name"] == tool_name:
+                return await self.session.call_tool(tool_name, tool_args)
+        return None
+
+    async def process_openai_message_response(self, openai_response):
+        """
+        Handle OpenAI responses that are plain messages (no function/tool call).
+        Extracts the answer text from the message content.
+        """
+        answer_text = ""
+        for item in openai_response.output:
+            if item.type == "message":
+                for content in item.content:
+                    if content.type == "output_text":
+                        answer_text+=content.text+"\n"
+        return answer_text
+
+
+
+
+        
     async def chat_loop(self):
-        """Run an interactive chat loop"""
+        """Run an interactive chat loop (always uses OpenAI, supports tool_choice)."""
         print("\nMCP Client Started!")
         print("Type your queries or 'quit' to exit.")
-        
-        llm_choice = input("Which llm? (claude/openai): ").strip().lower()
-        if llm_choice not in ["claude", "openai"]:
-            print("Invalid LLM choice. Defaulting to 'openai'.")
-            llm_choice = "openai"
+        print("Available tool_choice options: auto (default), required, none, function:<function_name>")
         while True:
             try:
                 query = input("\nQuery: ").strip()
-                
                 if query.lower() == 'quit':
                     break
-                    
-                response = await self.process_query(query, llm_choice=llm_choice)
-                print("\n" + response)
-                    
+                tool_choice = input("Choose tool_choice [auto/required/none/function:<name>]: ").strip()
+                if tool_choice.startswith("function:"):
+                    func_name = tool_choice[len("function:"):].strip()
+                    tool_choice_param = {"type": "function", "name": func_name}
+                elif tool_choice == "required":
+                    tool_choice_param = "required"
+                elif tool_choice == "none":
+                    tool_choice_param = "none"
+                else:
+                    tool_choice_param = "auto"
+                response = await self.process_query(query, llm_choice="openai", tool_choice=tool_choice_param)
+                print("\n" + str(response))
             except Exception as e:
                 print(f"\nError: {str(e)}")
-    
+
+
+    async def _call_openai_api(self, messages, tools=None, tool_choice="auto"):
+        """Helper to call the OpenAI API with the given client, messages, and optional tools and tool_choice."""
+        params = {
+            "model": "gpt-4.1",
+            "input": messages
+        }
+        if tools is not None:
+            params["tools"] = tools
+        if tool_choice is not None:
+            params["tool_choice"] = tool_choice
+        return self.openai.responses.create(**params)
+
+
     async def cleanup(self):
         """Clean up resources"""
         print("\n>>>>>Cleaning up resources...")

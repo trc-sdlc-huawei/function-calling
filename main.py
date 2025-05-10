@@ -2,8 +2,19 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from client import MCPClient
 import asyncio
+from typing import Optional, Dict, Any
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
+
+# Allow all CORS (development only)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 mcp_client = None
 
@@ -11,6 +22,7 @@ mcp_client = None
 class QueryRequest(BaseModel):
     query: str
     llm_choice: str = "mock-llm"
+    tool_choice: Optional[str|Dict[str, Any]] = None
 
 # Health check endpoint
 @app.get("/health")
@@ -33,18 +45,15 @@ async def startup_event():
 @app.post("/query")
 async def handle_query(req: QueryRequest):
     global mcp_client
-    response = await mcp_client.process_query(req.query, llm_choice=req.llm_choice)
+    response = await mcp_client.process_query(req.query, llm_choice=req.llm_choice, tool_choice=req.tool_choice)
     return {
-        "llm_choice": req.llm_choice,
-        "query": req.query,
         "response": response
     }
 
 @app.get("/tools")
 async def get_tools():
     global mcp_client
-    response = await mcp_client.session.list_tools()
-    return response.tools
+    return mcp_client.openai_tools
 
 
 @app.on_event("shutdown")
