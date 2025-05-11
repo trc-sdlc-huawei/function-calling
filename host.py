@@ -1,5 +1,7 @@
 import asyncio
 from typing import Dict, Any, Optional
+
+from openai.types.responses import ResponseFunctionToolCall
 from client import MCPClient
 from openai import OpenAI
 import json
@@ -16,6 +18,81 @@ class Host:
         self.tool_to_client: Dict[str, str] = {}  # tool_name -> client_name
         self.openai = OpenAI()
         self.tools: Dict[str, Any] = {}  # tool_name -> tool spec
+
+
+
+    async def process_query_stream_function_calling(self, query: str, tool_choice=None, parallel_tool_calls: bool = True):
+        """
+        Stream OpenAI response events as they arrive, and accumulate function call deltas for function calling.
+        Yields both raw events and final_tool_call objects as SSE.
+        """
+        import json
+        # accumulated stuff
+        final_tool_calls:Dict[int,ResponseFunctionToolCall] = {}
+
+        all_servers_tools_list = list(self.tools.values())
+        async for event in self._call_openai_api_stream(
+            messages=[{"role": "user", "content": query}],
+            tools=all_servers_tools_list,
+            tool_choice=tool_choice,
+            parallel_tool_calls=parallel_tool_calls
+        ):
+            try:
+                # Always yield the raw event as well
+                import json
+                yield f"data: {json.dumps(self._serialize_event(event), default=str)}\n\n"
+                if event.type == 'response.output_item.added' and event.item.type == "function_call":
+                    # ResponseFunctionToolCall
+                    final_tool_calls[event.output_index] = event.item;      
+                elif event.type == "response.function_call_arguments.delta":
+                    index = event.output_index
+                    if final_tool_calls[index]:
+                        final_tool_calls[index].arguments += event.delta
+                elif event.type == "response.response.done" and len(final_tool_calls) > 0:
+                    # TODO : call needed tools, call llm again... untill no tool calls
+                    pass
+                    
+
+                    
+
+                
+  
+            except Exception as e:
+                mylog.log_error(logger, f"Error processing OpenAI event: {e}", exc_info=True)
+                yield f"event: error\ndata: {str(e)}\n\n"    
+
+    async def _call_openai_api_stream(self, messages, tools=None, tool_choice="auto", parallel_tool_calls: bool = True):
+        """
+        Helper to call OpenAI API with stream=True. Yields raw events (as text/event-stream lines).
+        """
+        params = {
+            "model": "gpt-4.1",
+            "input": messages,
+            "stream": True
+        }
+        if tools is not None:
+            params["tools"] = tools
+        if tool_choice is not None:
+            params["tool_choice"] = tool_choice
+        if parallel_tool_calls is not None:
+            params["parallel_tool_calls"] = parallel_tool_calls
+        mylog.log_event(logger, "OpenAI: request (stream)", {"messages": messages, "tools": tools, "tool_choice": tool_choice, "parallel_tool_calls": parallel_tool_calls, "stream": True})
+        
+        stream = self.openai.responses.create(**params)
+        for event in stream:
+            # The event is a dict with 'type' and 'response' or other keys. Serialize to JSON and yield as SSE.
+            yield event  
+
+    def _serialize_event(self, event):
+            # Try model_dump, dict, or __dict__, else fallback to str
+            if hasattr(event, "model_dump"):
+                return event.model_dump()
+            elif hasattr(event, "dict"):
+                return event.dict()
+            elif hasattr(event, "__dict__"):
+                return event.__dict__
+            else:
+                return str(event)        
 
     async def add_client(self, server_script_path: str, command: Optional[str]=None, args: Optional[list]=None, env: Optional[dict]=None, server_name: Optional[str]=None):
         """
@@ -60,29 +137,7 @@ class Host:
                 server_name=server_name
             )
 
-    async def chat_loop(self):
-        print("\nHost Chat Loop Started!")
-        print("Type your queries or 'quit' to exit.")
-        print("Available tool_choice options: auto (default), required, none, function:<function_name>")
-        while True:
-            try:
-                query = input("\nQuery: ").strip()
-                if query.lower() == 'quit':
-                    break
-                tool_choice = input("Choose tool_choice [auto/required/none/function:<name>]: ").strip()
-                if tool_choice.startswith("function:"):
-                    func_name = tool_choice[len("function:"):].strip()
-                    tool_choice_param = {"type": "function", "name": func_name}
-                elif tool_choice == "required":
-                    tool_choice_param = "required"
-                elif tool_choice == "none":
-                    tool_choice_param = "none"
-                else:
-                    tool_choice_param = "auto"
-                response = await self.process_query(query, tool_choice=tool_choice_param)
-                print("\n" + str(response))
-            except Exception as e:
-                print(f"\nError: {str(e)}")
+
 
     async def process_query(self, query: str, tool_choice=None, parallel_tool_calls: bool = True):
         """Process a query using OpenAI and available tools, routing tool calls to the correct client. Errors from OpenAI API or tool calls are appended as error entries in the flow and returned to the user."""
@@ -93,9 +148,10 @@ class Host:
         answer_text = ""
         overall_tool_use_names: list = []
         error_info = None
+        tools_list = list(self.tools.values())
 
         while need_query_openai:
-            tools_list = list(self.tools.values())
+
             try:
                 if add_tools_to_next_openai_query:
                     openai_response = await self._call_openai_api(

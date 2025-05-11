@@ -24,6 +24,7 @@ class QueryRequest(BaseModel):
     llm_choice: str = "mock-llm"
     tool_choice: Optional[str|Dict[str, Any]] = None
     parallel_tool_calls: bool = True
+    stream: bool = False  # If True, stream the response from OpenAI
 
 # Health check endpoint
 @app.get("/health")
@@ -51,6 +52,24 @@ async def handle_query(req: QueryRequest):
     return {
         "response": response
     }
+
+# Streaming endpoint for OpenAI (yields events as they arrive)
+from fastapi.responses import StreamingResponse
+
+
+
+# Streaming endpoint for OpenAI function calling, accumulates function call deltas
+@app.post("/query-stream-function-calling")
+async def handle_query_stream_function_calling(req: QueryRequest):
+    global clients_host
+    async def event_generator():
+        async for event in clients_host.process_query_stream_function_calling(
+            req.query,
+            tool_choice=req.tool_choice,
+            parallel_tool_calls=req.parallel_tool_calls
+        ):
+            yield event
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 @app.get("/openai-tools")
 async def get_tools():
