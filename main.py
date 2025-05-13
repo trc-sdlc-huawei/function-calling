@@ -37,9 +37,9 @@ async def startup_event():
     global clients_host
     clients_host = Host()
     # Add as many server scripts as needed here
-    await clients_host.add_client('/home/user1/work/git-repo/quickstart-resources/weather-server-python/weather.py')
-    await clients_host.add_client('/home/user1/work/git-repo/quickstart-resources/weather-server-typescript/build/index.js')
-    # await clients_host.add_clients_from_config('config.json')
+    # await clients_host.add_client('/home/user1/work/git-repo/quickstart-resources/weather-server-python/weather.py')
+    # await clients_host.add_client_streamablehttp("node",["/home/user1/work/git-repo/quickstart-resources/weather-server-typescript/build/index.js","stremableHttp"],{}, "example",)
+    await clients_host.add_stdio_clients_from_config('config.json')
 
 @app.post("/query")
 async def handle_query(req: QueryRequest):

@@ -142,21 +142,16 @@ class Host:
             else:
                 return str(event)        
 
-    async def add_client(self, server_script_path: str, command: Optional[str]=None, args: Optional[list]=None, env: Optional[dict]=None, server_name: Optional[str]=None):
+    async def add_client_stdio(self, command: Optional[str]=None, args: Optional[list]=None, env: Optional[dict]=None, server_name: Optional[str]=None):
         """
         Add a client from a script path or with explicit command/args/env (for config file support).
         """
         client = MCPClient()
         # If command/args/env provided, use them for connection (assume MCPClient.connect_to_server supports them)
-        if command or args or env:
-            await client.connect_to_server(server_script_path, command=command, args=args, env=env)
-        else:
-            await client.connect_to_server(server_script_path)
+        await client.connect_to_server_stdio(command=command, args=args, env=env)
+
         # Use provided server_name or fallback to script filename
-        if server_name:
-            name = server_name
-        else:
-            name = os.path.basename(server_script_path)
+        name = server_name
         self.clients[name] = client
         # Map tools to this client
         for tool in getattr(client, 'openai_tools', []):
@@ -165,7 +160,25 @@ class Host:
                 self.tool_to_client[tool_name] = name
                 self.tools[tool_name] = tool
 
-    async def add_clients_from_config(self, config_path: str):
+
+    async def add_client_streamablehttp(self, command: Optional[str]=None, args: Optional[list]=None, env: Optional[dict]=None, server_name: Optional[str]=None):
+        """
+        Add a client from a script path or with explicit command/args/env (for config file support).
+        """
+        client = MCPClient()
+        await client.connect_to_server_streamablehttp(command=command, args=args, env=env)
+        # # Use provided server_name or fallback to script filename
+        name = server_name
+        self.clients[name] = client
+        # Map tools to this client
+        for tool in getattr(client, 'openai_tools', []):
+            tool_name = tool.get("name")
+            if tool_name:
+                self.tool_to_client[tool_name] = name
+                self.tools[tool_name] = tool
+          
+
+    async def add_stdio_clients_from_config(self, config_path: str):
         """
         Add all clients defined in a config JSON file using ConfigFileParser.
         """
@@ -175,10 +188,7 @@ class Host:
             args = server_conf.get("args", [])
             env = server_conf.get("env", {})
             # For each server, add a client with explicit command/args/env
-            # Use the command as the main script path (for legacy compatibility)
-            script_path = args[0] if args else command
-            await self.add_client(
-                script_path,
+            await self.add_client_stdio(
                 command=command,
                 args=args,
                 env=env,

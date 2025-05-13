@@ -3,6 +3,8 @@ from typing import Optional, List, Tuple
 from contextlib import AsyncExitStack
 
 from mcp import ClientSession, ListToolsResult, StdioServerParameters
+from mcp.client.streamable_http import streamablehttp_client
+
 from mcp.client.stdio import stdio_client
 
 
@@ -33,7 +35,7 @@ class MCPClient:
         self.exit_stack = AsyncExitStack()
         self.openai = OpenAI()
 
-    async def connect_to_server(self, server_script_path: str, command: str = None, args: list = None, env: dict = None):
+    async def connect_to_server_stdio(self, command: str = None, args: list = None, env: dict = None):
         """Connect to an MCP server, optionally with custom command/args/env (for config file support)
         Args:
             server_script_path: Path to the server script (.py or .js) (legacy)
@@ -42,24 +44,19 @@ class MCPClient:
             env: Environment variables dict
         """
         print("\n>>>>>the connect_to_server method of MCPClient")
-        if command is not None:
-            launch_command = command
-        else:
-            is_python = server_script_path.endswith('.py')
-            is_js = server_script_path.endswith('.js')
-            if not (is_python or is_js):
-                raise ValueError("Server script must be a .py or .js file")
-            launch_command = "python" if is_python else "node"
-        launch_args = args if args is not None else [server_script_path]
+
+        launch_args = args
         # Store launch details for metadata endpoint
-        self.command = launch_command
+        self.command = command
         self.launch_args = launch_args
         self.env = env
+        
         server_params = StdioServerParameters(
-            command=launch_command,
+            command=command,
             args=launch_args,
             env=env
         )
+
         stdio_transport = await self.exit_stack.enter_async_context(stdio_client(server_params))
         self.stdio, self.write = stdio_transport
         self.session = await self.exit_stack.enter_async_context(ClientSession(self.stdio, self.write))
@@ -69,6 +66,51 @@ class MCPClient:
         print("\nConnected to server with tools:", [tool.name for tool in self.raw_tools.tools])
 
         self.openai_tools = openai_converter.convert_tools(self.raw_tools.tools)
+
+   
+    async def _spawn_process(self, command: str, args: list, env: dict):
+        """Spawn a process with command/args/env"""
+        process = await asyncio.create_subprocess_exec(
+            command, *args,
+            env=env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        return process
+
+     
+
+    async def connect_to_server_streamablehttp(self, command: str = None, args: list = None, env: dict = None):
+        """Connect to an MCP server, optionally with custom command/args/env (for config file support)
+        Args:
+            server_script_path: Path to the server script (.py or .js) (legacy)
+            command: Command to launch server (e.g. 'node', 'python3', 'docker', etc.)
+            args: List of arguments for the command
+            env: Environment variables dict
+        """
+        print("\n>>>>>the connect_to_server method of MCPClient")
+        # Store launch details for metadata endpoint
+        self.command = command
+        self.launch_args = args
+        self.env = env
+        # self.process = await  self._spawn_process(command, args, env)
+
+        async with streamablehttp_client("http://localhost:3001/mcp") as ( read_stream, write_stream,_,):
+            # Create a session using the client streams
+            async with ClientSession(read_stream, write_stream) as session:
+                # Initialize the connection
+                await session.initialize()
+                tool_result = await session.list_tools()
+                self.session = session
+                self.raw_tools = await session.list_tools()
+                print("\nConnected to server with tools:", [tool.name for tool in self.raw_tools.tools])
+
+                self.openai_tools = openai_converter.convert_tools(self.raw_tools.tools)
+                # Call a tool
+
+        # List available tools
+       
+        
 
 
 
